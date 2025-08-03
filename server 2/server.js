@@ -11,12 +11,38 @@ require('dotenv').config();
 const app = express();
 const server = http.createServer(app);
 
-// 速率限制器 - 调整为更宽松的设置
+// 速率限制器 - 调整为更宽松的设置，适应Railway环境
 const rateLimiter = new RateLimiterMemory({
     keyPrefix: 'middleware',
-    points: 1000, // 允许的请求次数 - 增加到1000
+    points: 5000, // 允许的请求次数 - 进一步增加到5000
     duration: 900, // 15分钟
+    blockDuration: 120, // 被阻止后2分钟才能重试
 });
+
+// 日志控制 - 减少不必要的日志输出
+const isProduction = process.env.NODE_ENV === 'production';
+const logLevel = process.env.LOG_LEVEL || 'info';
+
+const logger = {
+    info: (message) => {
+        if (logLevel === 'info' || logLevel === 'debug') {
+            console.log(`[INFO] ${message}`);
+        }
+    },
+    warn: (message) => {
+        if (logLevel === 'warn' || logLevel === 'info' || logLevel === 'debug') {
+            console.warn(`[WARN] ${message}`);
+        }
+    },
+    error: (message) => {
+        console.error(`[ERROR] ${message}`);
+    },
+    debug: (message) => {
+        if (logLevel === 'debug') {
+            console.log(`[DEBUG] ${message}`);
+        }
+    }
+};
 
 // 中间件配置
 app.use(helmet({
@@ -55,7 +81,7 @@ app.use(cors({
         if (isAllowed || process.env.NODE_ENV === 'development') {
             callback(null, true);
         } else {
-            console.log('CORS blocked origin:', origin, 'Allowed origins:', allowedOrigins);
+            logger.warn('CORS blocked origin: ' + origin);
             callback(new Error('Not allowed by CORS'));
         }
     },
@@ -113,13 +139,13 @@ const connectDB = async () => {
     try {
         if (process.env.MONGODB_URI) {
             await mongoose.connect(process.env.MONGODB_URI);
-            console.log('MongoDB 连接成功');
+            logger.info('MongoDB 连接成功');
         } else {
-            console.log('未配置数据库，使用内存存储');
+            logger.info('未配置数据库，使用内存存储');
         }
     } catch (error) {
-        console.error('MongoDB 连接失败:', error);
-        console.log('降级到内存存储模式');
+        logger.error('MongoDB 连接失败: ' + error.message);
+        logger.info('降级到内存存储模式');
     }
 };
 
@@ -264,7 +290,7 @@ const dataService = {
                 return memoryStorage.addMessage(messageData.roomId, messageData);
             }
         } catch (error) {
-            console.error('保存消息失败:', error);
+            logger.error('保存消息失败: ' + error.message);
             return memoryStorage.addMessage(messageData.roomId, messageData);
         }
     },
@@ -282,7 +308,7 @@ const dataService = {
                 return memoryStorage.getMessages(roomId, limit);
             }
         } catch (error) {
-            console.error('获取消息失败:', error);
+            logger.error('获取消息失败: ' + error.message);
             return memoryStorage.getMessages(roomId, limit);
         }
     },
@@ -300,7 +326,7 @@ const dataService = {
                 return memoryStorage.addParticipant(participantData.roomId, participantData);
             }
         } catch (error) {
-            console.error('保存参与者失败:', error);
+            logger.error('保存参与者失败: ' + error.message);
             return memoryStorage.addParticipant(participantData.roomId, participantData);
         }
     },
@@ -318,7 +344,7 @@ const dataService = {
                 return memoryStorage.updateParticipant(roomId, userId, { ...updates, lastSeen: new Date() });
             }
         } catch (error) {
-            console.error('更新参与者失败:', error);
+            logger.error('更新参与者失败: ' + error.message);
             return memoryStorage.updateParticipant(roomId, userId, { ...updates, lastSeen: new Date() });
         }
     },
@@ -335,7 +361,7 @@ const dataService = {
                 return memoryStorage.getParticipants(roomId);
             }
         } catch (error) {
-            console.error('获取参与者失败:', error);
+            logger.error('获取参与者失败: ' + error.message);
             return memoryStorage.getParticipants(roomId);
         }
     },
@@ -349,7 +375,7 @@ const dataService = {
                 return memoryStorage.findParticipantBySocketId(socketId);
             }
         } catch (error) {
-            console.error('查找参与者失败:', error);
+            logger.error('查找参与者失败: ' + error.message);
             return memoryStorage.findParticipantBySocketId(socketId);
         }
     },
@@ -362,7 +388,7 @@ const dataService = {
                 memoryStorage.removeParticipant(roomId, userId);
             }
         } catch (error) {
-            console.error('删除参与者失败:', error);
+            logger.error('删除参与者失败: ' + error.message);
             memoryStorage.removeParticipant(roomId, userId);
         }
     }
@@ -370,7 +396,7 @@ const dataService = {
 
 // Socket.IO事件处理
 io.on('connection', (socket) => {
-    console.log('新用户连接:', socket.id);
+    logger.info('新用户连接: ' + socket.id);
     
     // 速率限制中间件
     socket.use(async (packet, next) => {
@@ -378,7 +404,7 @@ io.on('connection', (socket) => {
             await rateLimiter.consume(socket.handshake.address);
             next();
         } catch (rejRes) {
-            console.warn(`⚠️ 速率限制触发: ${socket.handshake.address}, 剩余时间: ${Math.round(rejRes.msBeforeNext / 1000)}秒`);
+            logger.warn(`⚠️ 速率限制触发: ${socket.handshake.address}, 剩余时间: ${Math.round(rejRes.msBeforeNext / 1000)}秒`);
             socket.emit('error', `请求频率过高，请${Math.round(rejRes.msBeforeNext / 1000)}秒后重试`);
             socket.disconnect();
         }
@@ -434,7 +460,7 @@ io.on('connection', (socket) => {
                     existingRoom = memoryStorage.getRoomInfo(roomId);
                 }
             } catch (error) {
-                console.error('查询房间信息失败:', error);
+                logger.error('查询房间信息失败: ' + error.message);
             }
             
             if (!existingRoom) {
@@ -457,17 +483,17 @@ io.on('connection', (socket) => {
                         memoryStorage.setRoomInfo(roomId, newRoomInfo);
                         existingRoom = newRoomInfo;
                     }
-                    console.log(`🏠 房间 ${roomId} 创建，创建者: ${username} (${userId})`);
+                    logger.info(`🏠 房间 ${roomId} 创建，创建者: ${username} (${userId})`);
                 } catch (error) {
-                    console.error('创建房间记录失败:', error);
+                    logger.error('创建房间记录失败: ' + error.message);
                 }
             } else {
                 // 房间已存在，检查当前用户是否是原创建者
                 isCreator = existingRoom.creatorId === userId;
                 if (isCreator) {
-                    console.log(`🔄 创建者 ${username} (${userId}) 重新加入房间 ${roomId}`);
+                    logger.info(`🔄 创建者 ${username} (${userId}) 重新加入房间 ${roomId}`);
                 } else {
-                    console.log(`👥 用户 ${username} (${userId}) 加入房间 ${roomId}，创建者: ${existingRoom.creatorName} (${existingRoom.creatorId})`);
+                    logger.info(`👥 用户 ${username} (${userId}) 加入房间 ${roomId}，创建者: ${existingRoom.creatorName} (${existingRoom.creatorId})`);
                 }
                 
                 // 更新房间活动时间
@@ -479,7 +505,7 @@ io.on('connection', (socket) => {
                         existingRoom.lastActivity = new Date();
                     }
                 } catch (error) {
-                    console.error('更新房间活动时间失败:', error);
+                    logger.error('更新房间活动时间失败: ' + error.message);
                 }
             }
             
@@ -528,10 +554,10 @@ io.on('connection', (socket) => {
             const updatedParticipants = await dataService.getParticipants(roomId);
             io.to(roomId).emit('participantsUpdate', updatedParticipants);
             
-            console.log(`用户 ${username} 加入房间 ${roomId}`);
+            logger.info(`用户 ${username} 加入房间 ${roomId}`);
             
         } catch (error) {
-            console.error('用户加入房间失败:', error);
+            logger.error('用户加入房间失败: ' + error.message);
             socket.emit('error', '加入房间失败，请重试');
         }
     });
@@ -571,10 +597,10 @@ io.on('connection', (socket) => {
             // 更新参与者最后活跃时间
             await dataService.updateParticipant(roomId, userId, { lastSeen: new Date() });
             
-            console.log(`房间 ${roomId} 收到新消息:`, message.text?.substring(0, 50) + '...');
+            logger.info(`房间 ${roomId} 收到新消息: ${message.text?.substring(0, 50) + '...'}`);
             
         } catch (error) {
-            console.error('发送消息失败:', error);
+            logger.error('发送消息失败: ' + error.message);
             socket.emit('error', '发送消息失败，请重试');
         }
     });
@@ -609,14 +635,14 @@ io.on('connection', (socket) => {
             io.to(roomId).emit('participantsUpdate', participants);
             
         } catch (error) {
-            console.error('用户离开房间失败:', error);
+            logger.error('用户离开房间失败: ' + error.message);
         }
     });
     
     // 断开连接
     socket.on('disconnect', async () => {
         try {
-            console.log('用户断开连接:', socket.id);
+            logger.info('用户断开连接: ' + socket.id);
             
             // 查找该socket对应的参与者并更新状态
             const participant = await dataService.findParticipantBySocketId(socket.id);
@@ -635,7 +661,7 @@ io.on('connection', (socket) => {
                 io.to(participant.roomId).emit('participantsUpdate', participants);
             }
         } catch (error) {
-            console.error('处理断开连接失败:', error);
+            logger.error('处理断开连接失败: ' + error.message);
         }
     });
     
@@ -687,7 +713,7 @@ io.on('connection', (socket) => {
                 }
             }
             
-            console.log(`🏁 会议 ${roomId} 已结束: 清理了 ${deletedMessages} 条消息, ${deletedParticipants} 个参与者`);
+            logger.info(`🏁 会议 ${roomId} 已结束: 清理了 ${deletedMessages} 条消息, ${deletedParticipants} 个参与者`);
             
             // 通知房间所有用户会议已结束
             io.to(roomId).emit('meetingEnded', {
@@ -709,7 +735,7 @@ io.on('connection', (socket) => {
             });
             
         } catch (error) {
-            console.error('结束会议失败:', error);
+            logger.error('结束会议失败: ' + error.message);
             socket.emit('error', '结束会议失败: ' + error.message);
         }
     });
@@ -717,16 +743,15 @@ io.on('connection', (socket) => {
     // 语音通话事件处理
     socket.on('callInvite', (data) => {
         const { roomId, callerId, callerName } = data;
-        console.log(`📞 收到通话邀请事件:`, data);
-        console.log(`📞 房间ID: ${roomId}, 发起者: ${callerName} (${callerId})`);
+        logger.debug(`📞 收到通话邀请事件: ${JSON.stringify(data)}`);
+        logger.debug(`📞 房间ID: ${roomId}, 发起者: ${callerName} (${callerId})`);
         
         // 检查房间内有多少用户
         const room = io.sockets.adapter.rooms.get(roomId);
         if (room) {
-            console.log(`📞 房间 ${roomId} 中有 ${room.size} 个用户`);
-            console.log(`📞 房间 ${roomId} 中的用户:`, Array.from(room));
+            logger.debug(`📞 房间 ${roomId} 中有 ${room.size} 个用户`);
         } else {
-            console.log(`📞 房间 ${roomId} 不存在`);
+            logger.debug(`📞 房间 ${roomId} 不存在`);
         }
         
         // 广播给房间内除发起者外的所有用户
@@ -735,7 +760,7 @@ io.on('connection', (socket) => {
             callerId,
             callerName
         });
-        console.log(`📞 用户 ${callerName} 发起语音通话邀请`);
+        logger.debug(`📞 用户 ${callerName} 发起语音通话邀请`);
     });
     
     socket.on('callAccept', (data) => {
@@ -746,7 +771,7 @@ io.on('connection', (socket) => {
             userId,
             userName
         });
-        console.log(`📞 用户 ${userName} 接受语音通话`);
+        logger.debug(`📞 用户 ${userName} 接受语音通话`);
     });
     
     socket.on('callReject', (data) => {
@@ -757,7 +782,7 @@ io.on('connection', (socket) => {
             userId,
             reason
         });
-        console.log(`📞 用户拒绝语音通话，原因: ${reason || '用户拒绝'}`);
+        logger.debug(`📞 用户拒绝语音通话，原因: ${reason || '用户拒绝'}`);
     });
     
     socket.on('callEnd', (data) => {
@@ -767,7 +792,7 @@ io.on('connection', (socket) => {
             roomId,
             userId
         });
-        console.log(`📞 用户结束语音通话`);
+        logger.debug(`📞 用户 ${userId} 结束语音通话`);
     });
     
     socket.on('callOffer', (data) => {
@@ -781,9 +806,9 @@ io.on('connection', (socket) => {
                 offer,
                 fromUserId
             });
-            console.log(`📞 转发WebRTC offer 从 ${fromUserId} 到 ${targetUserId}`);
+            logger.debug(`📞 转发WebRTC offer 从 ${fromUserId} 到 ${targetUserId}`);
         } else {
-            console.warn(`⚠️ 未找到目标用户 ${targetUserId} 的socket连接`);
+            logger.debug(`⚠️ 未找到目标用户 ${targetUserId} 的socket连接`);
         }
     });
     
@@ -798,9 +823,9 @@ io.on('connection', (socket) => {
                 answer,
                 fromUserId
             });
-            console.log(`📞 转发WebRTC answer 从 ${fromUserId} 到 ${targetUserId}`);
+            logger.debug(`📞 转发WebRTC answer 从 ${fromUserId} 到 ${targetUserId}`);
         } else {
-            console.warn(`⚠️ 未找到目标用户 ${targetUserId} 的socket连接`);
+            logger.debug(`⚠️ 未找到目标用户 ${targetUserId} 的socket连接`);
         }
     });
     
@@ -815,9 +840,9 @@ io.on('connection', (socket) => {
                 candidate,
                 fromUserId
             });
-            console.log(`📞 转发ICE候选 从 ${fromUserId} 到 ${targetUserId}`);
+            logger.debug(`📞 转发ICE候选 从 ${fromUserId} 到 ${targetUserId}`);
         } else {
-            console.warn(`⚠️ 未找到目标用户 ${targetUserId} 的socket连接`);
+            logger.debug(`⚠️ 未找到目标用户 ${targetUserId} 的socket连接`);
         }
     });
 });
@@ -851,7 +876,7 @@ app.get('/api/rooms/:roomId/messages', async (req, res) => {
         const messages = await dataService.getMessages(roomId, limit);
         res.json({ messages });
     } catch (error) {
-        console.error('获取消息失败:', error);
+        logger.error('获取消息失败: ' + error.message);
         res.status(500).json({ error: '获取消息失败' });
     }
 });
@@ -862,14 +887,14 @@ app.get('/api/rooms/:roomId/participants', async (req, res) => {
         const participants = await dataService.getParticipants(roomId);
         res.json({ participants });
     } catch (error) {
-        console.error('获取参与者失败:', error);
+        logger.error('获取参与者失败: ' + error.message);
         res.status(500).json({ error: '获取参与者失败' });
     }
 });
 
 // 错误处理
 app.use((err, req, res, next) => {
-    console.error('服务器错误:', err);
+    logger.error('服务器错误: ' + err.message);
     res.status(500).json({ error: '服务器内部错误' });
 });
 
@@ -882,17 +907,17 @@ app.use((req, res) => {
 function findSocketByUserId(userId) {
     // 遍历所有socket连接，找到匹配的用户ID
     const sockets = io.sockets.sockets;
-    console.log(`🔍 查找用户 ${userId} 的socket连接，当前连接数: ${sockets.size}`);
+    logger.debug(`🔍 查找用户 ${userId} 的socket连接，当前连接数: ${sockets.size}`);
     
     for (const [socketId, socket] of sockets) {
-        console.log(`🔍 检查socket ${socketId}: userId=${socket.userId}, username=${socket.username}`);
+        logger.debug(`🔍 检查socket ${socketId}: userId=${socket.userId}, username=${socket.username}`);
         if (socket.userId === userId) {
-            console.log(`✅ 找到用户 ${userId} 的socket连接: ${socketId}`);
+            logger.debug(`✅ 找到用户 ${userId} 的socket连接: ${socketId}`);
             return socket;
         }
     }
     
-    console.warn(`⚠️ 未找到用户 ${userId} 的socket连接`);
+    logger.warn(`⚠️ 未找到用户 ${userId} 的socket连接`);
     return null;
 }
 
@@ -910,7 +935,7 @@ setInterval(async () => {
             );
         }
     } catch (error) {
-        console.error('清理离线用户失败:', error);
+        logger.error('清理离线用户失败: ' + error.message);
     }
 }, 5 * 60 * 1000);
 
@@ -926,10 +951,10 @@ const startServer = async () => {
     await connectDB();
     
     server.listen(PORT, () => {
-        console.log(`🚀 Vibe Meeting 服务器运行在端口 ${PORT}`);
-        console.log(`📡 Socket.IO 服务已启动`);
-        console.log(`💾 数据库状态: ${mongoose.connection.readyState === 1 ? '已连接' : '使用内存存储'}`);
-        console.log(`🌍 环境: ${process.env.NODE_ENV || 'development'}`);
+        logger.info(`🚀 Vibe Meeting 服务器运行在端口 ${PORT}`);
+        logger.info(`📡 Socket.IO 服务已启动`);
+        logger.info(`💾 数据库状态: ${mongoose.connection.readyState === 1 ? '已连接' : '使用内存存储'}`);
+        logger.info(`🌍 环境: ${process.env.NODE_ENV || 'development'}`);
     });
 };
 
@@ -937,7 +962,7 @@ startServer().catch(console.error);
 
 // 优雅关闭
 process.on('SIGTERM', async () => {
-    console.log('收到SIGTERM信号，正在关闭服务器...');
+    logger.info('收到SIGTERM信号，正在关闭服务器...');
     server.close(() => {
         mongoose.connection.close();
         process.exit(0);
@@ -945,7 +970,7 @@ process.on('SIGTERM', async () => {
 });
 
 process.on('SIGINT', async () => {
-    console.log('收到SIGINT信号，正在关闭服务器...');
+    logger.info('收到SIGINT信号，正在关闭服务器...');
     server.close(() => {
         mongoose.connection.close();
         process.exit(0);

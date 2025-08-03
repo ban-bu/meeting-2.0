@@ -1031,9 +1031,9 @@ async function startVoiceCall() {
     }
 }
 
-// 结束语音通话
-function endVoiceCall() {
-    console.log('📞 结束语音通话...');
+// 清理通话资源（不发送事件）
+function cleanupCallResources() {
+    console.log('📞 清理通话资源...');
     
     // 停止本地流
     if (localStream) {
@@ -1059,6 +1059,17 @@ function endVoiceCall() {
     updateCallUI();
     hideCallPanel();
     
+    showToast('语音通话已结束', 'info');
+    console.log('✅ 通话资源已清理');
+}
+
+// 结束语音通话
+function endVoiceCall() {
+    console.log('📞 结束语音通话...');
+    
+    // 清理资源
+    cleanupCallResources();
+    
     // 通知其他用户结束通话
     if (isRealtimeEnabled && window.realtimeClient) {
         window.realtimeClient.sendCallEnd({
@@ -1067,7 +1078,6 @@ function endVoiceCall() {
         });
     }
     
-    showToast('语音通话已结束', 'info');
     console.log('✅ 语音通话已结束');
 }
 
@@ -1534,6 +1544,12 @@ function handleCallReject(data) {
 function handleCallEnd(data) {
     console.log('📞 用户结束通话:', data);
     
+    // 防止重复处理同一个用户的结束事件
+    if (!callParticipants.has(data.userId)) {
+        console.log('📞 用户已离开通话，跳过重复处理');
+        return;
+    }
+    
     callParticipants.delete(data.userId);
     
     // 关闭对等连接
@@ -1548,9 +1564,11 @@ function handleCallEnd(data) {
     
     updateCallUI();
     
-    if (callParticipants.size <= 1) {
-        // 如果只剩自己，结束通话
-        endVoiceCall();
+    // 只有当自己是最后一个参与者时才结束通话，避免循环触发
+    if (callParticipants.size <= 1 && callParticipants.has(currentUserId)) {
+        console.log('📞 只剩自己，结束通话');
+        // 直接清理资源，不发送callEnd事件
+        cleanupCallResources();
     }
 }
 
