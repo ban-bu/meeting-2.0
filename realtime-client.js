@@ -356,6 +356,12 @@ class RealtimeClient {
                 this.onIceCandidate(data);
             }
         });
+        
+        this.socket.on('muteStatus', (data) => {
+            if (this.onMuteStatus) {
+                this.onMuteStatus(data);
+            }
+        });
     }
     
     handleConnectionError(error) {
@@ -483,6 +489,14 @@ class RealtimeClient {
     sendIceCandidate(data) {
         if (this.socket && this.isConnected) {
             this.socket.emit('iceCandidate', data);
+            return true;
+        }
+        return false;
+    }
+    
+    sendMuteStatus(data) {
+        if (this.socket && this.isConnected) {
+            this.socket.emit('muteStatus', data);
             return true;
         }
         return false;

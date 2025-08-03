@@ -1168,6 +1168,19 @@ function toggleMute() {
     if (muteBtn) {
         muteBtn.classList.toggle('muted', isMuted);
         muteBtn.innerHTML = isMuted ? '<i class="fas fa-microphone-slash"></i>' : '<i class="fas fa-microphone"></i>';
+        muteBtn.style.background = isMuted ? '#ef4444' : '#10b981';
+    }
+    
+    // 更新通话参与者列表中的状态
+    updateCallParticipants();
+    
+    // 通知其他用户静音状态变化
+    if (isRealtimeEnabled && window.realtimeClient) {
+        window.realtimeClient.sendMuteStatus({
+            roomId,
+            userId: currentUserId,
+            isMuted
+        });
     }
     
     showToast(isMuted ? '已静音' : '已取消静音', 'info');
@@ -1282,7 +1295,10 @@ function updateCallParticipants() {
         <div class="call-participant-avatar">${currentUsername.charAt(0).toUpperCase()}</div>
         <div class="call-participant-info">
             <div class="call-participant-name">${currentUsername} (我)</div>
-            <div class="call-participant-status">${isMuted ? '已静音' : '在线'}</div>
+            <div class="call-participant-status ${isMuted ? 'muted' : 'online'}">
+                <i class="fas fa-${isMuted ? 'microphone-slash' : 'microphone'}"></i>
+                ${isMuted ? '已静音' : '在线'}
+            </div>
         </div>
     `;
     participantsList.appendChild(currentUserDiv);
@@ -1317,7 +1333,10 @@ function updateCallParticipants() {
                 <div class="call-participant-avatar">${participant.name.charAt(0).toUpperCase()}</div>
                 <div class="call-participant-info">
                     <div class="call-participant-name">${participant.name}</div>
-                    <div class="call-participant-status">在线</div>
+                    <div class="call-participant-status ${participant.isMuted ? 'muted' : 'online'}">
+                        <i class="fas fa-${participant.isMuted ? 'microphone-slash' : 'microphone'}"></i>
+                        ${participant.isMuted ? '已静音' : '在线'}
+                    </div>
                 </div>
             `;
             participantsList.appendChild(participantDiv);
@@ -1388,13 +1407,14 @@ function createPeerConnection(userId) {
     // 添加本地流
     if (localStream) {
         localStream.getTracks().forEach(track => {
+            console.log('📞 添加音频轨道到对等连接:', track.kind, track.enabled);
             peerConnection.addTrack(track, localStream);
         });
     }
     
     // 处理远程流
     peerConnection.ontrack = (event) => {
-        console.log('📞 收到远程音频流:', userId);
+        console.log('📞 收到远程音频流:', userId, event.streams[0].getTracks());
         remoteStreams.set(userId, event.streams[0]);
         
         // 播放远程音频
@@ -1402,6 +1422,21 @@ function createPeerConnection(userId) {
         audioElement.srcObject = event.streams[0];
         audioElement.autoplay = true;
         audioElement.muted = !isSpeakerOn;
+        audioElement.volume = 1.0;
+        
+        // 添加音频事件监听
+        audioElement.onloadedmetadata = () => {
+            console.log('📞 远程音频元数据加载完成');
+        };
+        
+        audioElement.onplay = () => {
+            console.log('📞 远程音频开始播放');
+        };
+        
+        audioElement.onerror = (error) => {
+            console.error('📞 远程音频播放错误:', error);
+        };
+        
         document.body.appendChild(audioElement);
     };
     
@@ -1587,6 +1622,18 @@ function handleIceCandidate(data) {
         } catch (error) {
             console.error('❌ 添加ICE候选失败:', error);
         }
+    }
+}
+
+// 处理静音状态
+function handleMuteStatus(data) {
+    console.log('📞 收到静音状态:', data);
+    
+    // 更新参与者列表中的静音状态
+    const participant = participants.find(p => p.userId === data.userId);
+    if (participant) {
+        participant.isMuted = data.isMuted;
+        updateCallParticipants();
     }
 }
     
@@ -1928,6 +1975,11 @@ function setupRealtimeClient() {
         onIceCandidate: (data) => {
             console.log('收到ICE候选:', data);
             handleIceCandidate(data);
+        },
+        
+        onMuteStatus: (data) => {
+            console.log('收到静音状态:', data);
+            handleMuteStatus(data);
         },
         
         onError: (error) => {
