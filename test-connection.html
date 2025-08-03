@@ -1,0 +1,63 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>连接测试</title>
+    <script src="https://cdn.socket.io/4.7.4/socket.io.min.js"></script>
+</head>
+<body>
+    <h1>WebSocket 连接测试</h1>
+    <div id="status">正在测试连接...</div>
+    <div id="log"></div>
+
+    <script>
+        const statusDiv = document.getElementById('status');
+        const logDiv = document.getElementById('log');
+        
+        function log(message) {
+            const time = new Date().toLocaleTimeString();
+            logDiv.innerHTML += `<div>[${time}] ${message}</div>`;
+            console.log(message);
+        }
+        
+        log('开始连接测试...');
+        
+        try {
+            const socket = io('http://localhost:3001', {
+                transports: ['websocket', 'polling'],
+                timeout: 10000
+            });
+            
+            socket.on('connect', () => {
+                log('✅ WebSocket 连接成功！');
+                statusDiv.innerHTML = '✅ 连接成功';
+                statusDiv.style.color = 'green';
+            });
+            
+            socket.on('disconnect', () => {
+                log('❌ WebSocket 连接断开');
+                statusDiv.innerHTML = '❌ 连接断开';
+                statusDiv.style.color = 'red';
+            });
+            
+            socket.on('connect_error', (error) => {
+                log(`❌ 连接错误: ${error.message}`);
+                statusDiv.innerHTML = `❌ 连接错误: ${error.message}`;
+                statusDiv.style.color = 'red';
+            });
+            
+            socket.on('error', (error) => {
+                log(`❌ Socket 错误: ${error}`);
+                statusDiv.innerHTML = `❌ Socket 错误: ${error}`;
+                statusDiv.style.color = 'red';
+            });
+            
+        } catch (error) {
+            log(`❌ 初始化错误: ${error.message}`);
+            statusDiv.innerHTML = `❌ 初始化错误: ${error.message}`;
+            statusDiv.style.color = 'red';
+        }
+    </script>
+</body>
+</html> 
