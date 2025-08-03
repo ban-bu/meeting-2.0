@@ -38,19 +38,13 @@
     color: var(--success-color);
 }
 
-/* 输入提示动画 - 优化版本 */
+/* 输入提示动画 */
 .typing-indicator-message {
     display: flex;
     align-items: flex-start;
     margin-bottom: 1rem;
     padding: 0.75rem;
-    animation: fadeIn 0.5s ease;
-    opacity: 0.8;
-    transition: opacity 0.3s ease;
-}
-
-.typing-indicator-message:hover {
-    opacity: 1;
+    animation: fadeIn 0.3s ease;
 }
 
 .typing-indicator-message .message-avatar {
@@ -97,21 +91,21 @@
 @keyframes typingDots {
     0%, 80%, 100% {
         transform: scale(0);
-        opacity: 0.3;
+        opacity: 0.5;
     }
     40% {
         transform: scale(1);
-        opacity: 0.8;
+        opacity: 1;
     }
 }
 
 @keyframes fadeIn {
     from {
         opacity: 0;
-        transform: translateY(5px);
+        transform: translateY(10px);
     }
     to {
-        opacity: 0.8;
+        opacity: 1;
         transform: translateY(0);
     }
 }
