@@ -1542,7 +1542,8 @@ function handleCallReject(data) {
 
 // 处理通话结束
 function handleCallEnd(data) {
-    console.log('📞 用户结束通话:', data);
+    // 临时注释掉日志以减少输出
+    // console.log('📞 用户结束通话:', data);
     
     // 防止重复处理同一个用户的结束事件
     if (!callParticipants.has(data.userId)) {
@@ -1976,7 +1977,8 @@ function setupRealtimeClient() {
         },
         
         onCallEnd: (data) => {
-            console.log('用户结束通话:', data);
+            // 临时注释掉日志以减少输出
+            // console.log('用户结束通话:', data);
             handleCallEnd(data);
         },
         

@@ -792,7 +792,8 @@ io.on('connection', (socket) => {
             roomId,
             userId
         });
-        logger.debug(`📞 用户 ${userId} 结束语音通话`);
+        // 临时注释掉这个日志以减少输出
+        // logger.debug(`📞 用户 ${userId} 结束语音通话`);
     });
     
     socket.on('callOffer', (data) => {
