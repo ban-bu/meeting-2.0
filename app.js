@@ -1692,8 +1692,25 @@ function setupEventListeners() {
     messageInput.addEventListener('keydown', handleKeyDown);
     messageInput.addEventListener('input', autoResizeTextarea);
     
-    // 实时输入提示
+    // 实时输入提示 - 优化版本
     messageInput.addEventListener('input', handleTypingIndicator);
+    
+    // 处理输入法事件，减少输入法状态变化的影响
+    messageInput.addEventListener('compositionstart', () => {
+        // 输入法开始输入时，暂时不发送输入提示
+        if (typingTimeout) {
+            clearTimeout(typingTimeout);
+        }
+    });
+    
+    messageInput.addEventListener('compositionend', () => {
+        // 输入法结束输入时，延迟发送输入提示
+        setTimeout(() => {
+            if (messageInput.value.trim()) {
+                handleTypingIndicator();
+            }
+        }, 300);
+    });
     
     // 用户名输入事件
     usernameInput.addEventListener('keydown', (e) => {
@@ -1735,24 +1752,40 @@ function handleKeyDown(e) {
     }
 }
 
-// 处理输入提示
+// 处理输入提示 - 优化版本
+let lastTypingTime = 0;
+let typingState = false;
+
 function handleTypingIndicator() {
     if (!isRealtimeEnabled || !window.realtimeClient) return;
     
-    // 发送正在输入信号
-    window.realtimeClient.sendTypingIndicator(true);
+    const now = Date.now();
+    
+    // 防止过于频繁的状态更新（至少间隔500ms）
+    if (now - lastTypingTime < 500) {
+        return;
+    }
+    
+    lastTypingTime = now;
+    
+    // 如果当前不在输入状态，才发送开始输入信号
+    if (!typingState) {
+        typingState = true;
+        window.realtimeClient.sendTypingIndicator(true);
+    }
     
     // 清除之前的定时器
     if (typingTimeout) {
         clearTimeout(typingTimeout);
     }
     
-    // 2秒后停止输入提示
+    // 3秒后停止输入提示（增加延迟）
     typingTimeout = setTimeout(() => {
-        if (window.realtimeClient) {
+        if (window.realtimeClient && typingState) {
+            typingState = false;
             window.realtimeClient.sendTypingIndicator(false);
         }
-    }, 2000);
+    }, 3000);
 }
 
 // 自动调整文本框大小
@@ -2024,12 +2057,20 @@ function updateConnectionStatus(isConnected) {
     }
 }
 
-// 显示输入提示
+// 显示输入提示 - 优化版本
+const typingIndicators = new Map(); // 跟踪所有输入提示的状态
+
 function showTypingIndicator(data) {
     const indicatorId = `typing-${data.userId}`;
     let indicator = document.getElementById(indicatorId);
     
     if (data.isTyping) {
+        // 如果指示器已存在且正在显示，不重复创建
+        if (indicator && typingIndicators.get(data.userId)) {
+            return;
+        }
+        
+        // 创建或更新指示器
         if (!indicator) {
             indicator = document.createElement('div');
             indicator.id = indicatorId;
@@ -2048,19 +2089,33 @@ function showTypingIndicator(data) {
             messagesContainer.appendChild(indicator);
             scrollToBottom();
         }
+        
+        // 标记为正在显示
+        typingIndicators.set(data.userId, true);
+        
+        // 清除之前的自动移除定时器
+        if (indicator.dataset.autoRemoveTimer) {
+            clearTimeout(parseInt(indicator.dataset.autoRemoveTimer));
+        }
+        
+        // 设置新的自动移除定时器（8秒后自动移除）
+        const timerId = setTimeout(() => {
+            const currentIndicator = document.getElementById(indicatorId);
+            if (currentIndicator) {
+                currentIndicator.remove();
+                typingIndicators.delete(data.userId);
+            }
+        }, 8000);
+        
+        indicator.dataset.autoRemoveTimer = timerId;
+        
     } else {
+        // 停止输入状态
         if (indicator) {
             indicator.remove();
+            typingIndicators.delete(data.userId);
         }
     }
-    
-    // 5秒后自动移除提示
-    setTimeout(() => {
-        const indicator = document.getElementById(indicatorId);
-        if (indicator) {
-            indicator.remove();
-        }
-    }, 5000);
 }
 
 // 滚动到底部
