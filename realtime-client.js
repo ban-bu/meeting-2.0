@@ -7,11 +7,14 @@ class RealtimeClient {
         this.isConnected = false;
         this.reconnectAttempts = 0;
         this.maxReconnectAttempts = 5;
-        this.reconnectDelay = 1000;
+        this.reconnectDelay = 2000; // 增加初始重连延迟到2秒
+        this.maxReconnectDelay = 30000; // 最大重连延迟30秒
         this.serverUrl = this.getServerUrl();
         this.currentRoomId = null;
         this.currentUserId = null;
         this.currentUsername = null;
+        this.reconnectTimer = null;
+        this.isReconnecting = false;
         
         // 事件回调
         this.onMessageReceived = null;
@@ -192,12 +195,20 @@ class RealtimeClient {
     }
     
     establishConnection() {
+        // 如果正在重连，不要重复连接
+        if (this.isReconnecting) {
+            console.log('正在重连中，跳过重复连接');
+            return;
+        }
+        
+        this.isReconnecting = true;
+        
         this.socket = io(this.serverUrl, {
             transports: ['websocket', 'polling'],
-            timeout: 10000,
-            reconnection: true,
-            reconnectionAttempts: this.maxReconnectAttempts,
-            reconnectionDelay: this.reconnectDelay
+            timeout: 15000, // 增加超时时间
+            reconnection: false, // 禁用自动重连，使用自定义重连逻辑
+            reconnectionAttempts: 0,
+            reconnectionDelay: 0
         });
         
         this.setupSocketEvents();
@@ -208,6 +219,13 @@ class RealtimeClient {
             console.log('WebSocket连接成功');
             this.isConnected = true;
             this.reconnectAttempts = 0;
+            this.isReconnecting = false;
+            
+            // 清除重连定时器
+            if (this.reconnectTimer) {
+                clearTimeout(this.reconnectTimer);
+                this.reconnectTimer = null;
+            }
             
             if (this.onConnectionChange) {
                 this.onConnectionChange(true);
@@ -221,34 +239,35 @@ class RealtimeClient {
             }
         });
         
-        this.socket.on('disconnect', () => {
-            console.log('WebSocket连接断开');
+        this.socket.on('disconnect', (reason) => {
+            console.log('WebSocket连接断开，原因:', reason);
             this.isConnected = false;
+            this.isReconnecting = false;
             
             if (this.onConnectionChange) {
                 this.onConnectionChange(false);
             }
             
-            showToast('实时连接已断开，尝试重连中...', 'warning');
+            // 只有在非主动断开的情况下才重连
+            if (reason !== 'io client disconnect') {
+                this.scheduleReconnect();
+            }
         });
         
         this.socket.on('connect_error', (error) => {
             console.error('连接错误:', error);
+            this.isReconnecting = false;
             this.handleConnectionError(error);
         });
         
-        this.socket.on('reconnect', (attemptNumber) => {
-            console.log(`重连成功，尝试次数: ${attemptNumber}`);
-            showToast('连接已恢复', 'success');
-        });
-        
-        this.socket.on('reconnect_error', (error) => {
-            console.error('重连失败:', error);
-            this.reconnectAttempts++;
-            
-            if (this.reconnectAttempts >= this.maxReconnectAttempts) {
-                showToast('连接失败，已切换到本地模式', 'error');
-                this.localMode = true;
+        this.socket.on('error', (error) => {
+            console.error('Socket错误:', error);
+            // 如果是速率限制错误，增加更长的延迟
+            if (error && error.message && error.message.includes('频率过高')) {
+                this.reconnectAttempts++;
+                const delay = Math.min(this.reconnectDelay * Math.pow(2, this.reconnectAttempts), this.maxReconnectDelay);
+                console.log(`速率限制触发，${delay/1000}秒后重试`);
+                this.scheduleReconnect(delay);
             }
         });
         
@@ -364,16 +383,47 @@ class RealtimeClient {
         });
     }
     
-    handleConnectionError(error) {
-        console.error('连接处理错误:', error);
-        
+    scheduleReconnect(customDelay = null) {
+        // 如果已经达到最大重连次数，切换到本地模式
         if (this.reconnectAttempts >= this.maxReconnectAttempts) {
-            showToast('无法连接到服务器，已切换到本地模式', 'error');
+            console.log('达到最大重连次数，切换到本地模式');
             this.localMode = true;
-            
-            if (this.onConnectionChange) {
-                this.onConnectionChange(false);
-            }
+            this.useLocalMode();
+            return;
+        }
+        
+        // 计算重连延迟（指数退避）
+        const delay = customDelay || Math.min(
+            this.reconnectDelay * Math.pow(2, this.reconnectAttempts), 
+            this.maxReconnectDelay
+        );
+        
+        console.log(`安排重连，${delay/1000}秒后重试 (${this.reconnectAttempts + 1}/${this.maxReconnectAttempts})`);
+        
+        // 清除之前的定时器
+        if (this.reconnectTimer) {
+            clearTimeout(this.reconnectTimer);
+        }
+        
+        // 设置新的重连定时器
+        this.reconnectTimer = setTimeout(() => {
+            this.reconnectAttempts++;
+            this.connect();
+        }, delay);
+        
+        showToast(`连接断开，${Math.round(delay/1000)}秒后重连...`, 'warning');
+    }
+    
+    handleConnectionError(error) {
+        console.error('处理连接错误:', error);
+        this.isReconnecting = false;
+        
+        // 检查是否是速率限制错误
+        if (error && error.message && error.message.includes('频率过高')) {
+            console.log('检测到速率限制错误，增加重连延迟');
+            this.scheduleReconnect(this.maxReconnectDelay);
+        } else {
+            this.scheduleReconnect();
         }
     }
     
@@ -538,6 +588,15 @@ class RealtimeClient {
     
     // 清理资源
     disconnect() {
+        // 清除重连定时器
+        if (this.reconnectTimer) {
+            clearTimeout(this.reconnectTimer);
+            this.reconnectTimer = null;
+        }
+        
+        this.isReconnecting = false;
+        this.reconnectAttempts = 0;
+        
         if (this.socket) {
             this.socket.disconnect();
             this.socket = null;
